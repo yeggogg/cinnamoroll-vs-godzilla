@@ -133,10 +133,10 @@
     width: 80,
     height: 90,
     vy: 0,
-    health: 100,
-    maxHealth: 100,
+    health: 300,
+    maxHealth: 300,
     shootCooldown: 0,
-    shootRate: 45,
+    shootRate: 28, // faster than player (35)
     grounded: true,
     aiJumpTimer: 0,
     aiJumpCooldown: 0,
@@ -144,6 +144,17 @@
     invincible: 0,
     animFrame: 0,
     tailWag: 0,
+    // Rage mode
+    rageMode: false,
+    // Shockwave
+    shockwaveCooldown: 0,
+    shockwaveTimer: 0,
+    shockwaves: [], // {x, y, radius, alpha}
+    // Laser beam
+    laserCooldown: 0,
+    laserTimer: 0,
+    laserWarning: 0,
+    laserY: 0,
   };
 
   // --- Bullets ---
@@ -152,6 +163,7 @@
 
   const BULLET_SPEED = 7;
   const BULLET_DAMAGE = 5;
+  const ENEMY_BULLET_DAMAGE = 8; // Godzilla hits harder
 
   // --- Stars (background) ---
   let stars = [];
@@ -232,6 +244,14 @@
     enemy.aiJumpCooldown = 0;
     enemy.hitFlash = 0;
     enemy.invincible = 0;
+    enemy.rageMode = false;
+    enemy.shockwaveCooldown = 180; // first shockwave after 3s
+    enemy.shockwaveTimer = 0;
+    enemy.shockwaves = [];
+    enemy.laserCooldown = 360; // first laser after 6s
+    enemy.laserTimer = 0;
+    enemy.laserWarning = 0;
+    enemy.laserY = 0;
     playerBullets = [];
     enemyBullets = [];
     particles = [];
@@ -258,44 +278,53 @@
 
   // --- AI ---
   function updateAI() {
-    // Dodge incoming bullets
+    // Rage mode at 50% HP
+    enemy.rageMode = enemy.health <= enemy.maxHealth * 0.5;
+
+    // Dodge incoming bullets - smarter detection
     let shouldJump = false;
 
     // Check if there's a bullet coming toward Godzilla
     for (let b of playerBullets) {
       const dx = b.x - enemy.x;
       const dy = Math.abs(b.y - (enemy.y - enemy.height / 2));
-      if (dx > 0 && dx < 200 && dy < 80 && enemy.grounded) {
+      // Wider dodge range, react earlier
+      if (dx > 0 && dx < 280 && dy < 100 && enemy.grounded) {
         shouldJump = true;
         break;
       }
     }
 
-    // Random jump occasionally
-    if (enemy.aiJumpCooldown <= 0 && Math.random() < 0.008 && enemy.grounded) {
+    // Also dodge shockwaves (own shockwaves don't hurt, but keeps AI active)
+    // Random jump more often
+    const jumpChance = enemy.rageMode ? 0.025 : 0.012;
+    if (enemy.aiJumpCooldown <= 0 && Math.random() < jumpChance && enemy.grounded) {
       shouldJump = true;
     }
 
     if (shouldJump && enemy.grounded && enemy.aiJumpCooldown <= 0) {
-      enemy.vy = JUMP_FORCE * (0.8 + Math.random() * 0.4);
+      const jumpPower = enemy.rageMode ? 1.1 : 0.9;
+      enemy.vy = JUMP_FORCE * (jumpPower + Math.random() * 0.3);
       enemy.grounded = false;
-      enemy.aiJumpCooldown = 40 + Math.random() * 40;
+      enemy.aiJumpCooldown = enemy.rageMode ? 20 + Math.random() * 20 : 30 + Math.random() * 30;
     }
 
     if (enemy.aiJumpCooldown > 0) enemy.aiJumpCooldown--;
   }
 
   // --- Shooting ---
-  function shoot(obj, bullets, targetX, isPlayer) {
+  function shoot(obj, bullets, targetY, isPlayer, angleOffset) {
     const bx = obj.x + (isPlayer ? 30 : -30);
     const by = obj.y - obj.height / 2;
-    const angle = Math.atan2((targetX - obj.y + 20) - by, (isPlayer ? 1 : -1));
+    const baseAngle = isPlayer ? 0 : Math.PI;
+    const angle = baseAngle + (angleOffset || 0);
+    const speed = isPlayer ? BULLET_SPEED : BULLET_SPEED * 1.15; // enemy bullets faster
     bullets.push({
       x: bx,
       y: by,
-      vx: isPlayer ? BULLET_SPEED : -BULLET_SPEED,
-      vy: 0,
-      damage: BULLET_DAMAGE + (isPlayer ? 0 : Math.random() * 3),
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      damage: isPlayer ? BULLET_DAMAGE : ENEMY_BULLET_DAMAGE,
       trail: []
     });
   }
@@ -870,29 +899,115 @@
     // Shooting
     if (player.shootCooldown > 0) player.shootCooldown--;
     if (player.shootCooldown <= 0) {
-      shoot(player, playerBullets, enemy.y, true);
+      shoot(player, playerBullets, enemy.y, true, 0);
       player.shootCooldown = player.shootRate;
     }
 
     if (enemy.shootCooldown > 0) enemy.shootCooldown--;
     if (enemy.shootCooldown <= 0) {
-      shoot(enemy, enemyBullets, player.y, false);
-      enemy.shootCooldown = enemy.shootRate + Math.random() * 15;
+      if (enemy.rageMode) {
+        // Rage: fan of 3 bullets!
+        shoot(enemy, enemyBullets, player.y, false, -0.2);
+        shoot(enemy, enemyBullets, player.y, false, 0);
+        shoot(enemy, enemyBullets, player.y, false, 0.2);
+      } else {
+        shoot(enemy, enemyBullets, player.y, false, 0);
+      }
+      enemy.shootCooldown = enemy.shootRate + Math.random() * 10;
     }
 
     // AI
     updateAI();
+
+    // --- Shockwave mechanic ---
+    if (enemy.shockwaveCooldown > 0) {
+      enemy.shockwaveCooldown--;
+    } else if (enemy.grounded && enemy.shockwaveTimer <= 0) {
+      // Stomp! Create shockwave
+      enemy.shockwaves.push({
+        x: enemy.x,
+        y: GROUND_Y,
+        radius: 0,
+        alpha: 1,
+        speed: 4
+      });
+      enemy.shockwaveTimer = 15; // warning duration
+      enemy.shockwaveCooldown = enemy.rageMode ? 120 : 200;
+      spawnParticles(enemy.x, GROUND_Y, 15, '200,150,100', 6);
+      shakeTimer = 10;
+      shakeIntensity = 5;
+    }
+    if (enemy.shockwaveTimer > 0) enemy.shockwaveTimer--;
+
+    // Update shockwaves
+    for (let i = enemy.shockwaves.length - 1; i >= 0; i--) {
+      const sw = enemy.shockwaves[i];
+      sw.radius += sw.speed;
+      sw.alpha -= 0.008;
+      // Hit player if on ground
+      if (player.grounded && player.invincible <= 0) {
+        const dx = player.x - sw.x;
+        const dist = Math.abs(dx);
+        if (dist < sw.radius + 20 && dist > sw.radius - 30) {
+          player.health -= 10;
+          player.hitFlash = 10;
+          player.invincible = 10;
+          spawnParticles(player.x, player.y - 30, 12, '255,150,50', 6);
+          shakeTimer = 12;
+          shakeIntensity = 6;
+        }
+      }
+      if (sw.alpha <= 0) enemy.shockwaves.splice(i, 1);
+    }
+
+    // --- Laser beam mechanic ---
+    if (enemy.laserCooldown > 0) {
+      enemy.laserCooldown--;
+    }
+    if (enemy.laserWarning > 0) {
+      enemy.laserWarning--;
+      if (enemy.laserWarning === 0) {
+        // Fire laser!
+        enemy.laserTimer = 40;
+        enemy.laserY = player.y - player.height / 2; // aim at player
+      }
+    }
+    if (enemy.laserTimer > 0) {
+      enemy.laserTimer--;
+      // Hit player if in laser path
+      const laserTop = enemy.laserY - 25;
+      const laserBottom = enemy.laserY + 25;
+      const playerTop = player.y - player.height;
+      const playerBottom = player.y;
+      if (player.invincible <= 0 &&
+          playerTop < laserBottom && playerBottom > laserTop) {
+        player.health -= 3; // continuous damage
+        player.hitFlash = 3;
+        player.invincible = 3;
+        spawnParticles(player.x, (playerTop + playerBottom) / 2, 2, '255,50,50', 3);
+      }
+      if (enemy.laserTimer === 0) {
+        enemy.laserCooldown = enemy.rageMode ? 200 : 350;
+      }
+    }
+    // Trigger laser
+    if (enemy.laserCooldown <= 0 && enemy.laserWarning <= 0 && enemy.laserTimer <= 0) {
+      enemy.laserWarning = 45; // 0.75s warning
+      enemy.laserCooldown = 999; // prevent re-trigger during warning
+    }
 
     // Update bullets
     for (let b of playerBullets) {
       b.trail.push({ x: b.x, y: b.y });
       if (b.trail.length > 5) b.trail.shift();
       b.x += b.vx;
+      b.y += (b.vy || 0);
     }
     for (let b of enemyBullets) {
       b.trail.push({ x: b.x, y: b.y });
       if (b.trail.length > 5) b.trail.shift();
       b.x += b.vx;
+      b.y += (b.vy || 0);
     }
 
     // Bullet collision - player bullets vs enemy
@@ -993,9 +1108,73 @@
     drawCinnamoroll(player.x, player.y - player.height / 2, playerFlash);
     drawGodzilla(enemy.x, enemy.y - enemy.height / 2, enemyFlash);
 
+    // Rage mode aura
+    if (enemy.rageMode) {
+      const rageAlpha = 0.3 + 0.2 * Math.sin(Date.now() / 150);
+      const rageGrad = ctx.createRadialGradient(enemy.x, enemy.y - enemy.height / 2, 30, enemy.x, enemy.y - enemy.height / 2, 80);
+      rageGrad.addColorStop(0, `rgba(255,30,0,${rageAlpha * 0.5})`);
+      rageGrad.addColorStop(0.5, `rgba(255,60,0,${rageAlpha})`);
+      rageGrad.addColorStop(1, 'rgba(255,0,0,0)');
+      ctx.fillStyle = rageGrad;
+      ctx.beginPath();
+      ctx.arc(enemy.x, enemy.y - enemy.height / 2, 80, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Rage label
+      ctx.fillStyle = `rgba(255,50,0,${0.7 + 0.3 * Math.sin(Date.now() / 200)})`;
+      ctx.font = 'bold 14px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('😡 暴怒！', enemy.x, enemy.y - enemy.height - 20);
+    }
+
     // Draw bullets
     playerBullets.forEach(b => drawBullet(b, true));
     enemyBullets.forEach(b => drawBullet(b, false));
+
+    // Draw shockwaves
+    enemy.shockwaves.forEach(sw => {
+      ctx.strokeStyle = `rgba(255,150,50,${sw.alpha})`;
+      ctx.lineWidth = 4 * sw.alpha;
+      ctx.shadowColor = `rgba(255,100,20,${sw.alpha})`;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      // Draw as ground-level arc
+      ctx.moveTo(sw.x - sw.radius, GROUND_Y);
+      ctx.quadraticCurveTo(sw.x, GROUND_Y - sw.radius * 0.4, sw.x + sw.radius, GROUND_Y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    });
+
+    // Draw laser warning
+    if (enemy.laserWarning > 0) {
+      const alpha = 0.3 + 0.3 * Math.sin(enemy.laserWarning * 0.5);
+      const ly = enemy.laserY || (player.y - player.height / 2);
+      ctx.fillStyle = `rgba(255,30,30,${alpha})`;
+      ctx.fillRect(enemy.x - 30, ly - 25, GAME_W - enemy.x + 30, 50);
+      // Warning text
+      ctx.fillStyle = `rgba(255,255,100,${alpha + 0.3})`;
+      ctx.font = 'bold 16px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('⚠️ 激光预警！跳跃躲避！', GAME_W / 2, ly - 35);
+    }
+
+    // Draw laser beam
+    if (enemy.laserTimer > 0) {
+      const ly = enemy.laserY;
+      const alpha = 0.8;
+      // Outer glow
+      const lgrad = ctx.createLinearGradient(0, ly - 30, 0, ly + 30);
+      lgrad.addColorStop(0, 'rgba(255,0,0,0)');
+      lgrad.addColorStop(0.2, 'rgba(255,50,0,0.6)');
+      lgrad.addColorStop(0.5, 'rgba(255,200,50,0.9)');
+      lgrad.addColorStop(0.8, 'rgba(255,50,0,0.6)');
+      lgrad.addColorStop(1, 'rgba(255,0,0,0)');
+      ctx.fillStyle = lgrad;
+      ctx.fillRect(enemy.x - 30, ly - 30, GAME_W - enemy.x + 30, 60);
+      // Core beam
+      ctx.fillStyle = 'rgba(255,255,200,0.8)';
+      ctx.fillRect(enemy.x - 30, ly - 4, GAME_W - enemy.x + 30, 8);
+    }
 
     // Draw particles
     drawParticles();
@@ -1016,7 +1195,7 @@
     if (gameState === STATE.PLAYING) {
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
       ctx.font = '11px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-      ctx.fillText('点击屏幕跳跃 | 支持二段跳', GAME_W / 2, GAME_H - 12);
+      ctx.fillText('点击跳跃(二段跳) | 躲震荡波&激光 | 哥斯拉半血暴怒', GAME_W / 2, GAME_H - 12);
     }
 
     // Menu screen
@@ -1041,7 +1220,7 @@
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.font = '14px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
       ctx.fillText('点击屏幕跳跃躲避子弹 · 支持二段跳', GAME_W / 2, GAME_H / 2 + 70);
-      ctx.fillText('玉桂狗自动射击 · 先耗尽对方血量者胜', GAME_W / 2, GAME_H / 2 + 92);
+      ctx.fillText('⚠️ 躲震荡波 · 跳激光 · 哥斯拉半血暴怒！', GAME_W / 2, GAME_H / 2 + 92);
     }
 
     // Game Over
