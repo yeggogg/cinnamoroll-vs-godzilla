@@ -527,7 +527,7 @@
     if (enemy.laserCooldown > 0) enemy.laserCooldown--;
     if (enemy.laserWarning > 0) {
       enemy.laserWarning--;
-      if (enemy.laserWarning === 0) { enemy.laserTimer = 40; enemy.laserY = player.y - player.height / 2; }
+      if (enemy.laserWarning === 0) { enemy.laserTimer = 40; /* laserY already set at warning start */ }
     }
     if (enemy.laserTimer > 0) {
       enemy.laserTimer--;
@@ -540,7 +540,11 @@
       if (enemy.laserTimer === 0) enemy.laserCooldown = enemy.rageMode ? 350 : 500;
     }
     if (enemy.laserCooldown <= 0 && enemy.laserWarning <= 0 && enemy.laserTimer <= 0) {
-      enemy.laserWarning = 45; enemy.laserCooldown = 999;
+      enemy.laserWarning = 45; // 0.75s warning
+      // Fixed position set NOW — won't follow player
+      // Covers mid-height: player must jump over it
+      enemy.laserY = GROUND_Y - 100 - Math.random() * 80;
+      enemy.laserCooldown = 999;
     }
 
     // Update bullets
@@ -629,7 +633,7 @@
     // Laser warning
     if (enemy.laserWarning > 0) {
       const alpha = 0.3 + 0.3 * Math.sin(enemy.laserWarning * 0.5);
-      const ly = enemy.laserY || (player.y - player.height / 2);
+      const ly = enemy.laserY;
       ctx.fillStyle = `rgba(255,30,30,${alpha})`;
       ctx.fillRect(enemy.x - 30, ly - 25, GAME_W - enemy.x + 30, 50);
       ctx.fillStyle = `rgba(255,255,100,${alpha + 0.3})`;
